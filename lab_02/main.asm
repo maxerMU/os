@@ -19,10 +19,14 @@ idescr struc
 	offs_h	dw 0
 idescr ends
 
-data segment use16
+stack segment STACK use32
+	stk_start db 256 dup(0)
+	stack_size=$-stk_start
+stack ends
+
+data segment use32
     gdt_null descr   <0,0,0,0,0,0>
-    gdt_data descr   <data_size-1,0,0,92h,0,0>
-    gdt_code16 descr <code16_size-1,0,0,98h,0,0>
+    gdt_data descr   <data_size-1,0,0,92h,40h,0>
     gdt_code32 descr <code32_size-1,0,0,98h,40h,0>
     gdt_stack descr  <stack_size-1,0,0,92h,40h,0> 
     gdt_screen descr <4095,8000h,0Bh,92h,0,0>
@@ -32,15 +36,16 @@ data segment use16
 	pdescr df 0
 
 	datas=8
-	code16s=16
-	code32s=24
-	stacks=32
-	screens=40
-	data4gbs=48
+	code32s=16
+	stacks=24
+	screens=32
+	data4gbs=40
 	
 	
 	idt label word
-	idescr_0_31 idescr 32 dup(<0,code32s,0,8Fh,0>)
+	idescr_0_12 idescr 13 dup(<0,code32s,0,8Fh,0>)
+	idescr_13 idescr 1 dup(<0,code32s,0,8Fh,0>)
+	idescr_14_31 idescr 18 dup(<0,code32s,0,8Fh,0>)
 	timer_inter idescr <0,code32s,0,10001110b,0>
 	keyboard_inter idescr <0,code32s,0,10001110b,0>
 
@@ -51,8 +56,12 @@ data segment use16
 	master_mask db 0
 	slave_mask db 0
 
-	mempos=200
-	cursor_pos dw 0
+    memmsg_pos=80*2
+    mempos=80*2+mem_msg_len*2
+    mem_msg db 'Memory: '
+    mem_msg_len=$-mem_msg
+
+	cursor_pos dw 80*4
 	cursor_on_symb db 219
 	cursor_off_symb db 32
 
@@ -62,17 +71,24 @@ data segment use16
 	is_running db 1
 
     asciimap db 0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0, 0
-    db 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', 0, 0
-    db 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', 0, 0, 0, '\'
-    db 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/'
+    db 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', 0, 0
+    db 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', 0, 0, 0, '\'
+    db 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/'
+	db 0, 0, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 0, 0
+    db 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 0, 0
+    db 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', 0, 0, 0, '|'
+    db 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?'
 
 	color=1ah
+	color_black=0h
+
+    rm_msg_wait db 27, '[29;44mAny key to enter protected mode!', 27, '[0m$'
+    rm_msg  db 27, '[29;44mNow in Real Mode again! ', 27, '[0m$'
 	
-	realmode db 'hello from real mode'
-	realmode_len=$-realmode
+    pm_msg_pos=0
 	protectedmode db 'hello from protected mode'
 	protectedmode_len=$-protectedmode
-	
+
 	data_size=$-gdt_null
 data ends
 
@@ -83,6 +99,11 @@ code32_starts:
 dummy proc
 	iretd
 dummy endp
+
+inter_13 proc
+    pop eax
+    iretd
+inter_13 endp
 
 timer_int proc
 	push di
@@ -141,8 +162,11 @@ new_keyboard proc
 	jmp return_from_keyboard
 
 print_value:
-	cmp al, 80h
+    cmp al, 80h  ;  При отпускании клавиши контроллер клавиатуры посылает в тот же порт скан-код, увеличенный на 80h
 	ja return_from_keyboard
+
+    cmp al, 0Eh
+    je backspace
 
 	xor ah, ah
 	xor ebx, ebx
@@ -155,6 +179,22 @@ print_value:
     stosw
 
 	mov cursor_pos, di
+
+    jmp return_from_keyboard
+
+backspace: 
+    backspace_loop:
+        mov dl, ' '
+        mov al, dl
+        mov ah, color_black
+
+        mov bx, cursor_pos
+        mov es:[bx], ax
+        sub cursor_pos, 2
+
+        mov bx, cursor_pos
+        mov es:[bx], ax
+    jmp return_from_keyboard
 
 
 return_from_keyboard:
@@ -175,110 +215,79 @@ return_from_keyboard:
 	iretd
 new_keyboard endp
 
-print_eax proc
-	push ecx
-	push ebx
-	push edx
-
-    add ebx, 10h
-    mov ecx, 8
-    mov dh, color
-
-    print_symbol:
-        mov dl, al
-        and dl, 0Fh
-
-        cmp dl, 10
-        jl add_zero_sym
-        add dl, 'A' - '0' - 10
-
-    add_zero_sym:
-        add dl, '0' 
-        mov es:[ebx], dx 
-        ror eax, 4       
-        sub ebx, 2       
-    loop print_symbol
-
-	pop edx
-	pop ebx
-	pop ecx
-
-    ret
-print_eax endp
-
- output_dec:
-        push edx
-        push ecx
-        push ebx
-    
-    mov ecx, 1024
+output_dec proc near
+    push edx
+    push ecx
+    push ebx
     xor edx, edx
+    mov ecx, 100000h
     div ecx
+    mov ecx, 10
+    mov bx, mempos
+    prmem:
+        xor edx, edx
+        div ecx
+        add dl, '0'
+        mov dh, color
+        mov es:[bx], dx
+        dec bx
+        dec bx
+        cmp eax, 0
+    jnz prmem
 
-        mov ecx, 10
-        mov bx, mempos
-        prmem:
-            xor edx, edx
-            div ecx; edx:eax / 10
-      
-      add dl, '0'
-            mov dh, color
-            mov es:[bx], dx
-            dec bx
-            dec bx
-            cmp eax, 0
-        jnz prmem
-    
-    mov bx, mempos + 2
-    mov ah, color
-    mov al, 'k'
-    mov es:[bx], ax
-    inc bx
-    inc bx
-    mov al, 'b'
-    mov es:[bx], ax
+    mov bx, mempos
+    add bx, 2
+    mov dl, 'M'
+    mov es:[bx], dx
+
+    add bx, 2
+    mov dl, 'b'
+    mov es:[bx], dx
 
     pop ebx
     pop ecx
     pop edx
-	jmp return_from_output
+    ret
+output_dec endp
 
-count_memory:
-        mov ax, datas
-        mov ds, ax
+countMemory proc 
+    mov ax, data4gbs
+    mov ds, ax
 
-		push eax
-        push ebx
-        push edx
-        mov ebx, 100000h
-        mov eax, 400h
-        xor edx, edx
-    cloop:
-        mov [ebx], eax
-        cmp eax, [ebx]
-        je cloop1
-        jmp exit
-    cloop1:
-        add edx, 4h
-    cloop2:
-        add ebx, 4h
-    
-        jz exit
-        jmp cloop
-    exit:
+    push eax
+    push ebx
+    push edx
+	push ecx
+    mov ebx, 100000h
+    mov eax, 0AEh
+    xor ecx, ecx
+cloop:
+	mov dh, [ebx]
+    mov [ebx], eax
+    cmp eax, [ebx]
+    je cloop1
+    jmp exit
+cloop1:
+    inc ecx
+cloop2:
+	mov [ebx], dh
+    inc ebx
 
-    mov eax, edx
-  ;xor edx, edx
-  ;mov ebx, 1024
-  ;div bx; eax / 1024
-    jmp output_dec
-return_from_output:
+    jz exit
+    jmp cloop
 
+exit:
+
+    mov eax, ecx
+    add eax, 100000h
+    call output_dec
+
+    pop ecx
     pop edx
     pop ebx
     pop eax
-
-	jmp return_from_count
+    ret
+countMemory endp
 
 start_pm:
 	mov ax, datas
@@ -290,57 +299,74 @@ start_pm:
 	mov ax, screens
 	mov es, ax
 
-    sti
-
-	mov di, cursor_pos
-    mov bx, offset protectedmode
-    mov cx, offset protectedmode_len
+	mov edi, pm_msg_pos
+    mov ebx, offset protectedmode
+    mov ecx, offset protectedmode_len
     mov ah, color
   
 loop_01:
-    mov al, byte ptr [bx]
-    inc bx
+    mov al, byte ptr [ebx]
+    inc ebx
     stosw
     loop loop_01
 
-	mov cursor_pos, di
+    mov edi, memmsg_pos
+    mov ebx, offset mem_msg
+    mov ecx, offset mem_msg_len
+    mov ah, color
+
+loop_02:
+    mov al, byte ptr [bx]
+    inc ebx
+    stosw
+    loop loop_02
+
+    call countMemory
+    mov ax, datas
+    mov ds, ax
+    
+    ;Разрешение прерываний
+    sti
+    xor al, al
+    out 70h, al
 
 main_loop:
 	cmp is_running, 1
 	jz main_loop
 
-    jmp count_memory
-return_from_count:
+
 	mov ax, datas
 	mov ds, ax
 
-	mov gdt_code16.limit, 0FFFFh
-	mov gdt_data.limit, 0FFFFh
-	mov gdt_stack.limit, 0FFFFh
-	mov gdt_screen.limit, 0FFFFh
+    cli
+
+	;mov gdt_code16.limit, 0FFFFh
+	;mov gdt_data.limit, 0FFFFh
+	;mov gdt_stack.limit, 0FFFFh
+	;mov gdt_screen.limit, 0FFFFh
 	
-	push ds
-	pop ds
-	push es
-	pop es
-	push ss
-	pop ss
+	;push ds
+	;pop ds
+	;push es
+	;pop es
+	;push ss
+	;pop ss
+
+	mov eax, cr0
+	and eax, 0FFFFFFFEh
+	mov cr0, eax
 	
-	db 0eah
-	dd offset return_rm
-	dw code16s
+
+    db 0eah
+    dd offset return_rm
+    dw code16
 
 	code32_size=$-code32_starts
 code32 ends
 
 code16 segment use16
-	assume cs:code16, es:code32, ds:data, ss:stack
-
+	assume cs:code16, ds:data, ss:stack
 start:	
-	; clear screen
-    mov ax, 3
-    int 10h
-
 	xor eax, eax
 	mov ax, data
 	mov ds, ax
@@ -349,21 +375,34 @@ start:
 	shl eax, 4
 	
 	mov ebp, eax
-	
+
 	mov bx, offset gdt_data
 	mov [bx].base_l, ax
 	shr eax, 16
 	mov [bx].base_m, al
-	
-	; линейный адрес сегмента кода -> база дескриптора кода (16р)
-	xor eax, eax
-	mov ax, cs
-	shl eax, 4
-	mov bx, offset gdt_code16
-	mov [bx].base_l, ax
-	shr eax, 16
-	mov [bx].base_m, al
-	
+
+	; clear screen
+    mov ax, 3
+    int 10h
+
+    mov ah, 09h
+    lea dx, rm_msg_wait
+    int 21h
+    xor dx, dx
+    mov ah, 2
+    mov dl, 13
+    int 21h
+    mov dl, 10
+    int 21h
+
+    ; ожидание ввода символа
+    mov ah, 10h
+    int 16h
+
+    ; очистить экран
+    mov ax, 3
+    int 10h
+
 	; линейный адрес сегмента кода -> база дескриптора кода (32р)
 	xor eax, eax
 	mov ax, code32
@@ -439,6 +478,8 @@ start:
     out 92h, al
 
 	cli
+    mov al, 80h
+    out 70h, al
 	
 	mov eax, cr0
 	or eax, 1
@@ -453,10 +494,6 @@ start:
 
 
 return_rm:
-	mov eax, cr0
-	and eax, 0FFFFFFFEh
-	mov cr0, eax
-	
 	db 0eah
 	dw offset go
 	dw code16
@@ -498,17 +535,22 @@ go:
 
 	sti
 
+    ; очистить экран
     mov ax, 3
     int 10h
 
+    mov ah, 09h
+    lea dx, rm_msg
+    int 21h
+    xor dx, dx
+    mov ah, 2
+    mov dl, 13
+    int 21h
+    mov dl, 10
+    int 21h
+
 	mov ax, 4c00h
 	int 21h
-	
-	code16_size=$-start
-code16 ends
 
-stack segment STACK use32
-	stk_start db 256 dup(0)
-	stack_size=$-stk_start
-stack ends
+code16 ends
 end start
