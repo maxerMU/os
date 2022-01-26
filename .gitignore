@@ -2,3 +2,5 @@
 *.exe
 *.out
 *.OBJ
+*.out
+*.vscode/
