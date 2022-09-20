@@ -1,0 +1,1 @@
+cmd_/home/max/repos/os/sem_06/lab_03/part_01/md.mod := { echo  /home/max/repos/os/sem_06/lab_03/part_01/md.o;  echo; } > /home/max/repos/os/sem_06/lab_03/part_01/md.mod

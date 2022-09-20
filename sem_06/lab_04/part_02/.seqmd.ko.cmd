@@ -1,0 +1,1 @@
+cmd_/home/max/repos/os/sem_06/lab_04/part_02/seqmd.ko := ld -r  -m elf_x86_64  --build-id=sha1  -T scripts/module.lds -o /home/max/repos/os/sem_06/lab_04/part_02/seqmd.ko /home/max/repos/os/sem_06/lab_04/part_02/seqmd.o /home/max/repos/os/sem_06/lab_04/part_02/seqmd.mod.o;  true

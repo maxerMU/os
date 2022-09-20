@@ -1,0 +1,1 @@
+cmd_/home/max/repos/os/sem_06/lab_08/part_01/modules.order := {   echo /home/max/repos/os/sem_06/lab_08/part_01/main.ko; :; } | awk '!x[$$0]++' - > /home/max/repos/os/sem_06/lab_08/part_01/modules.order
